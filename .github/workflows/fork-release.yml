@@ -30,7 +30,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v9
         with:
           workflow: build-snapshot.yml
-          name: "*all-in-one"
+          name: .*all-in-one
           name_is_regexp: true
           path: dist-all-in-one/
           run_id: ${{ github.event.workflow_run.id }}
@@ -39,7 +39,7 @@ jobs:
         uses: dawidd6/action-download-artifact@v9
         with:
           workflow: build-snapshot.yml
-          name: "*standard"
+          name: .*standard
           name_is_regexp: true
           path: dist-standard/
           run_id: ${{ github.event.workflow_run.id }}

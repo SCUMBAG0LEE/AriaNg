@@ -1,85 +1,83 @@
-name: Fork Release (AriaNg)
+name: Fork Release from Existing Build
 
 on:
-  push:
-    tags:
-      - "*.*.*"
-      - "v*.*.*"
+  workflow_run:
+    workflows: ["Build Snapshot"]
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       target_tag:
-        description: 'Tag version to release (e.g., 1.3.15)'
+        description: 'Tag version (e.g. 1.3.15)'
         required: false
         type: string
 
 jobs:
   publish-fork-release:
+    # Only run if the triggering build succeeded (or manually triggered)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # 1. Determine target tag and clean version string
-      - name: Determine Version
-        id: version_info
+      # 1. Download pre-built artifacts from the completed 'Build Snapshot' workflow
+      - name: Download all-in-one artifact
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: build-snapshot.yml
+          name: "*all-in-one"
+          name_is_regexp: true
+          path: dist-all-in-one/
+          run_id: ${{ github.event.workflow_run.id }}
+
+      - name: Download standard artifact
+        uses: dawidd6/action-download-artifact@v9
+        with:
+          workflow: build-snapshot.yml
+          name: "*standard"
+          name_is_regexp: true
+          path: dist-standard/
+          run_id: ${{ github.event.workflow_run.id }}
+
+      # 2. Package artifacts into final release ZIPs
+      - name: Package Release Archives
+        id: pkg
         run: |
+          mkdir -p release-files
+          
+          # Fetch tag/version info
+          UPSTREAM="mayswind/AriaNg"
           INPUT_TAG="${{ inputs.target_tag }}"
-          GIT_TAG="${{ github.ref_name }}"
           
           if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="$GIT_TAG"
           else
-            TAG="1.3.15"
+            # Get latest tag from upstream
+            TAG=$(gh api "repos/$UPSTREAM/releases/latest" --jq '.tag_name' 2>/dev/null || echo "1.3.15")
           fi
           
           CLEAN_VER=$(echo "$TAG" | sed 's/^v//')
+
+          # Zip up downloaded artifacts
+          cd dist-all-in-one && zip -r -9 "../release-files/AriaNg-${CLEAN_VER}-AllInOne.zip" . && cd ..
+          cd dist-standard && zip -r -9 "../release-files/AriaNg-${CLEAN_VER}.zip" . && cd ..
+
           echo "TAG=$TAG" >> $GITHUB_OUTPUT
-          echo "CLEAN_VER=$CLEAN_VER" >> $GITHUB_OUTPUT
 
-      # 2. Setup Node.js & Gulp
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: |
-          npm install
-          npm install -g gulp
-
-      # 3. Build & Package both All-In-One and Standard ZIP files
-      - name: Build & Package All-In-One version
-        run: |
-          mkdir -p release-files
-          gulp clean build-bundle
-          cd dist
-          zip -r -9 "../release-files/AriaNg-${{ steps.version_info.outputs.CLEAN_VER }}-AllInOne.zip" .
-          cd ..
-
-      - name: Build & Package Standard version
-        run: |
-          gulp clean build
-          cd dist
-          zip -r -9 "../release-files/AriaNg-${{ steps.version_info.outputs.CLEAN_VER }}.zip" .
-          cd ..
-
-      # 4. Fetch OP's Release Title & Notes (with local fallback)
-      - name: Fetch Upstream Release Info
+      # 3. Fetch OP's Release Title & Changelog
+      - name: Fetch Upstream Release Details
         id: upstream_info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           UPSTREAM="mayswind/AriaNg"
-          TAG="${{ steps.version_info.outputs.CLEAN_VER }}"
+          TAG="${{ steps.pkg.outputs.TAG }}"
           
-          # Query GitHub API for OP's release notes by tag or latest
           RELEASE_JSON=$(gh api "repos/$UPSTREAM/releases/tags/$TAG" 2>/dev/null || gh api "repos/$UPSTREAM/releases/latest" 2>/dev/null || echo "")
           
           TITLE=""
@@ -89,26 +87,20 @@ jobs:
             BODY=$(echo "$RELEASE_JSON" | jq -r '.body')
           fi
           
-          # Fallback values if API call returns empty or null
-          if [ -z "$TITLE" ] || [ "$TITLE" = "null" ]; then
-            TITLE="AriaNg $TAG"
-          fi
-          
-          if [ -z "$BODY" ] || [ "$BODY" = "null" ]; then
-            BODY="Automated build release for AriaNg version $TAG."
-          fi
+          [ -z "$TITLE" ] || [ "$TITLE" = "null" ] && TITLE="AriaNg $TAG"
+          [ -z "$BODY" ] || [ "$BODY" = "null" ] && BODY="Automated release build for AriaNg version $TAG."
           
           echo "$BODY" > release-notes.md
           echo "RELEASE_TITLE=$TITLE" >> $GITHUB_OUTPUT
 
-      # 5. Publish Full Release on Fork (Published, non-draft)
+      # 4. Publish Release on Fork
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.upstream_info.outputs.RELEASE_TITLE }}
-          tag_name: ${{ steps.version_info.outputs.TAG }}
+          tag_name: ${{ steps.pkg.outputs.TAG }}
           body_path: release-notes.md
           files: ./release-files/*.zip
           draft: false
-          prerelease: ${{ contains(steps.version_info.outputs.TAG, '-') }}
-          make_latest: ${{ !contains(steps.version_info.outputs.TAG, '-') }}
+          prerelease: ${{ contains(steps.pkg.outputs.TAG, '-') }}
+          make_latest: ${{ !contains(steps.pkg.outputs.TAG, '-') }}

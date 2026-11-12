@@ -27,6 +27,6 @@ jobs:
           git remote add upstream https://github.com/mayswind/AriaNg.git
           git fetch upstream --tags --force
           
-          git merge upstream/master --no-edit  --allow-unrelated-histories
+          git merge upstream/master --no-edit --allow-unrelated-histories -X theirs
           git push origin master
           git push origin --tags --force

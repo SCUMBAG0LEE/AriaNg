@@ -28,4 +28,5 @@ jobs:
           git fetch upstream --tags
           
           git merge upstream/master --no-edit  --allow-unrelated-histories
-          git push origin master --tags
+          git push origin master
+          git push origin --tags --force
